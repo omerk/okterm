@@ -14,9 +14,14 @@ using System.Windows.Shapes;
 using System.IO.Ports;
 using System.Windows.Threading;
 using System.Collections.Concurrent;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Management;
 
 namespace okterm
 {
+
+    
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
@@ -33,7 +38,9 @@ namespace okterm
         List<string> portList = new List<string>();
         ConcurrentQueue<char> receiveQueue = new ConcurrentQueue<char>();
         DispatcherTimer receiveTimer = new System.Windows.Threading.DispatcherTimer();
+        ManagementEventWatcher watcher;
         Boolean portOpen = false;
+
         #endregion
 
         #region Serial Port stuff
@@ -103,15 +110,22 @@ namespace okterm
         #region Terminal text functions
         void addText(String text, Brush color)
         {
-            TextRange tr = new TextRange(txtTerminal.Document.ContentEnd, txtTerminal.Document.ContentEnd);
-            tr.Text = text;
-            tr.ApplyPropertyValue(TextElement.ForegroundProperty, color);
-            //tr.ApplyPropertyValue(TextElement.FontWeightProperty, FontWeights.Bold);
+            Dispatcher.BeginInvoke(
+              new Action(() =>
+              {
+                  TextRange tr = new TextRange(txtTerminal.Document.ContentEnd, txtTerminal.Document.ContentEnd);
+                  tr.Text = text;
+                  tr.ApplyPropertyValue(TextElement.ForegroundProperty, color);
+                  //tr.ApplyPropertyValue(TextElement.FontWeightProperty, FontWeights.Bold);
 
-            if (chkBoxScroll.IsChecked == true)
-            {
-                txtTerminal.ScrollToEnd();
-            }
+                  if (chkBoxScroll.IsChecked == true)
+                  {
+                      txtTerminal.ScrollToEnd();
+                  }
+              }),
+                  DispatcherPriority.ApplicationIdle);
+
+
         }
 
         void addTextSent(String text)
@@ -209,6 +223,95 @@ namespace okterm
             }
         }
 
+
+        #endregion
+
+        #region Initialisation and event handlers
+        private void Window_Closing(object sender, CancelEventArgs e)
+        {
+            // to prevent "COM object that has been separated from its underlying RCW cannot be used."
+            watcher.Stop();
+        }
+
+        private void receiveTimer_Tick(object sender, EventArgs e)
+        {
+            printRecvBuf();
+        }
+
+        private void handleWMIEvent(object sender, EventArrivedEventArgs e)
+        {
+            int EventType = int.Parse(e.NewEvent.GetPropertyValue("EventType").ToString());
+
+            //event types: http://msdn.microsoft.com/en-us/library/aa394124%28VS.85%29.aspx
+            Console.Write("Win32_DeviceChangeEvent: ");
+            switch (EventType)
+            {
+                case 1:
+                    addTextInfo("Configuration changed");
+                    break;
+
+                case 2:
+                    addTextInfo("Device Arrival");
+                    break;
+
+                case 3:
+                    addTextInfo("Device Removal");
+                    break;
+
+                case 4:
+                    addTextInfo("Docking");
+                    break;
+
+                default:
+                    addTextInfo("Unknown event type!");
+                    break;
+            }
+
+            listPorts();
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    comboBoxPorts.Items.Refresh();
+                }), DispatcherPriority.ApplicationIdle);
+
+            
+        }
+
+        private void init(object sender, RoutedEventArgs e)
+        {
+
+            listPorts();
+
+            comboBoxSpeeds.ItemsSource = baudrates;
+            comboBoxPorts.ItemsSource = portList;
+
+            try
+            {
+                WqlEventQuery query = new WqlEventQuery("SELECT * FROM Win32_DeviceChangeEvent");
+                watcher = new ManagementEventWatcher(query);
+                watcher.EventArrived += new EventArrivedEventHandler(handleWMIEvent);
+                watcher.Start();
+            }
+            catch (ManagementException ex)
+            {
+                addTextError(ex.Message);
+            }
+
+            // A single tick represents one hundred nanoseconds
+            receiveTimer.Interval = new TimeSpan(1000000); // update every millisec            
+            receiveTimer.Tick += new EventHandler(receiveTimer_Tick);
+        }
+        #endregion
+
+        #region UI niceties
+        private void updateTerminalScroll(object sender, SizeChangedEventArgs e)
+        {
+            if (chkBoxScroll.IsChecked == true)
+            {
+                txtTerminal.ScrollToEnd();
+            }
+        }
+
         private void btnClear_Click(object sender, RoutedEventArgs e)
         {
             txtTerminal.SelectAll();
@@ -222,25 +325,9 @@ namespace okterm
         }
         #endregion
 
-        #region Initialisation and Timer tick handler
-        private void receiveTimer_Tick(object sender, EventArgs e)
-        {
-            printRecvBuf();
-        }
 
-        private void init(object sender, RoutedEventArgs e)
-        {
 
-            listPorts();
 
-            comboBoxSpeeds.ItemsSource = baudrates;
-            comboBoxPorts.ItemsSource = portList;
-
-            // A single tick represents one hundred nanoseconds
-            receiveTimer.Interval = new TimeSpan(1000000); // update every millisec            
-            receiveTimer.Tick += new EventHandler(receiveTimer_Tick);
-        }
-        #endregion
 
     }
 }
