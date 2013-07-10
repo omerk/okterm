@@ -21,7 +21,6 @@ using System.Management;
 namespace okterm
 {
 
-    
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
@@ -34,28 +33,49 @@ namespace okterm
 
         #region Globals
         SerialPort serialport = new SerialPort();
-        List<string> baudrates = new List<string>(){"9600", "19200", "57600", "115200"};
+        List<string> baudrates = new List<string>(){"1200", "2400", "4800", "9600",
+                                                    "14400", "19200", "28800", "38400",
+                                                    "56000", "57600", "115200", "256000"};
         List<string> portList = new List<string>();
         ConcurrentQueue<char> receiveQueue = new ConcurrentQueue<char>();
         DispatcherTimer receiveTimer = new System.Windows.Threading.DispatcherTimer();
         ManagementEventWatcher watcher;
         Boolean portOpen = false;
+        char lastchar;
 
         #endregion
 
         #region Serial Port stuff
+        void listPorts()
+        {
+            portList.Clear();
+            foreach (string port in SerialPort.GetPortNames())
+            {
+                portList.Add(port);
+            }
+        }
 
         void sendData(String str)
         {
             if (portOpen)
             {
-                serialport.Write(str);
+                try
+                {
+                    serialport.Write(str);
+                }
+                catch (Exception ex)
+                {
+                    addTextError(ex.Message + "\n");
+                }
+            }
+            else
+            {
+                addTextError("Not connected\n");
             }
 
         }
 
-        //FIXME: get rid of the ConcurrentQueue?
-        void receiveData(object sender, SerialDataReceivedEventArgs ev)
+        void readSerialBuffer()
         {
             int buflen = serialport.BytesToRead;
             char[] recBuf = new char[buflen];
@@ -65,44 +85,19 @@ namespace okterm
                 serialport.Read(recBuf, 0, buflen);
                 for (int index = 0; index < buflen; index++)
                 {
-                    receiveQueue.Enqueue(recBuf[index]);
+                    lastchar = recBuf[index];
+                    addTextReceived(lastchar.ToString());
                 }
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                addTextError(e.ToString());
+                addTextError(ex.Message + "\n");
             }
         }
 
-        private void printRecvBuf()
+        void receiveData(object sender, SerialDataReceivedEventArgs ev)
         {
-            char c;
-
-            try
-            {
-                while (receiveQueue.TryDequeue(out c))
-                {
-                    addTextReceived(c.ToString());
-                }
-
-            }
-            catch (Exception e)
-            {
-                addTextError(e.ToString());
-            }
-        }
-
-        void listPorts()
-        {
-            addTextInfo("listing ports");
-
-            portList.Clear();
-            string[] ports = SerialPort.GetPortNames();
-            foreach (string port in ports)
-            {
-                portList.Add(port);
-            }
-
+            readSerialBuffer();
         }
 
         #endregion
@@ -110,22 +105,23 @@ namespace okterm
         #region Terminal text functions
         void addText(String text, Brush color)
         {
+            // Use dispatcher invoke so this could be used from other threads as well
             Dispatcher.BeginInvoke(
-              new Action(() =>
-              {
-                  TextRange tr = new TextRange(txtTerminal.Document.ContentEnd, txtTerminal.Document.ContentEnd);
-                  tr.Text = text;
-                  tr.ApplyPropertyValue(TextElement.ForegroundProperty, color);
-                  //tr.ApplyPropertyValue(TextElement.FontWeightProperty, FontWeights.Bold);
+                new Action(() =>
+                {
+                    //char c = txtTerminal.Text[txtTerminal.Text.Length - 1];
+                    //string lastChar = txtTerminal.Substring(txtTerminal.length - 1)
 
-                  if (chkBoxScroll.IsChecked == true)
-                  {
-                      txtTerminal.ScrollToEnd();
-                  }
-              }),
-                  DispatcherPriority.ApplicationIdle);
+                    TextRange tr = new TextRange(txtTerminal.Document.ContentEnd, txtTerminal.Document.ContentEnd);
+                    tr.Text = text;
+                    tr.ApplyPropertyValue(TextElement.ForegroundProperty, color);
+                    //tr.ApplyPropertyValue(TextElement.FontWeightProperty, FontWeights.Bold);
 
-
+                    if (chkBoxScroll.IsChecked == true)
+                    {
+                        txtTerminal.ScrollToEnd();
+                    }
+                }), DispatcherPriority.ApplicationIdle);
         }
 
         void addTextSent(String text)
@@ -140,12 +136,40 @@ namespace okterm
 
         void addTextError(String text)
         {
-            addText(text, Brushes.Red);
+            addText(addNewline(text), Brushes.Red);
         }
 
         void addTextInfo(String text)
         {
-            addText(text, Brushes.LightSkyBlue);
+            addText(addNewline(text), Brushes.LightSkyBlue);
+        }
+
+        string addNewline(String text)
+        {
+            // this is quite hacky:
+            // check if the existing text already has newlines so that appended messages
+            // will be added on the next line. RichTextBox control seems to add \r\n by
+            // default it seems, which is annoying...
+            string txtTerminalText = "";
+
+            Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    txtTerminal.SelectAll();
+                    txtTerminalText = txtTerminal.Selection.Text;
+                }));
+
+            if (txtTerminalText.Length > 4)
+            {
+                string l = txtTerminalText.Substring(txtTerminalText.Length - 4);
+                if (String.Compare(l, "\r\n\r\n") != 0)
+                {
+                    text = "\n" + text;
+                }
+            }
+            
+
+            return text;
         }
         #endregion
 
@@ -167,6 +191,7 @@ namespace okterm
                     {
                         s += "\r";
                     }
+
                     sendData(s);
                     addTextSent(s);
                     txtPrompt.Clear();
@@ -180,45 +205,61 @@ namespace okterm
         }
         #endregion
 
-        #region Buttons and control stuff
+        #region Open/Close button
         private void btnControl_Click(object sender, RoutedEventArgs e)
         {
+
             if (portOpen)
             {
                 try
                 {
                     serialport.Close();
-                    receiveTimer.Stop();
-
                     portOpen = false;
+
                     btnControl.Content = "Open Port";
-                    addTextInfo("Port closed\n");
+                    addTextInfo(comboBoxPorts.SelectedItem + " closed\n");
+                    comboBoxPorts.IsEnabled = true;
+                    comboBoxSpeeds.IsEnabled = true;
+                    windowMain.Title = "okterm";
                 }
                 catch (Exception ex)
                 {
-                    addTextError(ex.ToString());
+                    addTextError(ex.Message + "\n");
                 }
 
             }
             else
             {
-                try
+                if ((comboBoxSpeeds.SelectedItem == null) || (comboBoxPorts.SelectedItem == null))
                 {
-                    serialport.PortName = comboBoxPorts.SelectedItem.ToString();
-                    serialport.BaudRate = int.Parse(comboBoxSpeeds.SelectedItem.ToString());
-                    serialport.Open();
-                    serialport.DataReceived += new SerialDataReceivedEventHandler(receiveData);
-                    
-                    receiveTimer.Start();
-
-                    portOpen = true;
-                    btnControl.Content= "Close Port";
-                    addTextInfo("Port opened\n");
-
+                    addTextError("select port/speed");
                 }
-                catch (Exception ex)
+                else
                 {
-                    addTextError(ex.ToString());
+
+                    try
+                    {
+                        serialport.PortName = comboBoxPorts.SelectedItem.ToString();
+                        serialport.BaudRate = int.Parse(comboBoxSpeeds.SelectedItem.ToString());
+                        serialport.Open();
+                        portOpen = true;
+
+                        serialport.DiscardInBuffer();
+                        serialport.DiscardOutBuffer();
+                        serialport.DataReceived += new SerialDataReceivedEventHandler(receiveData);
+
+                        btnControl.Content = "Close Port";
+                        addTextInfo(comboBoxPorts.SelectedItem + " opened\n");
+                        comboBoxPorts.IsEnabled = false;
+                        comboBoxSpeeds.IsEnabled = false;
+                        windowMain.Title = "okterm [" + comboBoxPorts.SelectedItem + ", " + comboBoxSpeeds.SelectedItem + "]";
+
+                        //readSerialBuffer();
+                    }
+                    catch (Exception ex)
+                    {
+                        addTextError(ex.Message + "\n");
+                    }
                 }
             }
         }
@@ -226,16 +267,11 @@ namespace okterm
 
         #endregion
 
-        #region Initialisation and event handlers
+        #region App event handlers
         private void Window_Closing(object sender, CancelEventArgs e)
         {
             // to prevent "COM object that has been separated from its underlying RCW cannot be used."
             watcher.Stop();
-        }
-
-        private void receiveTimer_Tick(object sender, EventArgs e)
-        {
-            printRecvBuf();
         }
 
         private void handleWMIEvent(object sender, EventArrivedEventArgs e)
@@ -247,23 +283,23 @@ namespace okterm
             switch (EventType)
             {
                 case 1:
-                    addTextInfo("Configuration changed");
+                    addTextInfo("Configuration changed\n");
                     break;
 
                 case 2:
-                    addTextInfo("Device Arrival");
+                    addTextInfo("Device Arrival\n");
                     break;
 
                 case 3:
-                    addTextInfo("Device Removal");
+                    addTextInfo("Device Removal\n");
                     break;
 
                 case 4:
-                    addTextInfo("Docking");
+                    addTextInfo("Docking\n");
                     break;
 
                 default:
-                    addTextInfo("Unknown event type!");
+                    addTextInfo("Unknown event type!\n");
                     break;
             }
 
@@ -274,36 +310,11 @@ namespace okterm
                     comboBoxPorts.Items.Refresh();
                 }), DispatcherPriority.ApplicationIdle);
 
-            
         }
 
-        private void init(object sender, RoutedEventArgs e)
-        {
-
-            listPorts();
-
-            comboBoxSpeeds.ItemsSource = baudrates;
-            comboBoxPorts.ItemsSource = portList;
-
-            try
-            {
-                WqlEventQuery query = new WqlEventQuery("SELECT * FROM Win32_DeviceChangeEvent");
-                watcher = new ManagementEventWatcher(query);
-                watcher.EventArrived += new EventArrivedEventHandler(handleWMIEvent);
-                watcher.Start();
-            }
-            catch (ManagementException ex)
-            {
-                addTextError(ex.Message);
-            }
-
-            // A single tick represents one hundred nanoseconds
-            receiveTimer.Interval = new TimeSpan(1000000); // update every millisec            
-            receiveTimer.Tick += new EventHandler(receiveTimer_Tick);
-        }
         #endregion
 
-        #region UI niceties
+        #region UI Event Handlers
         private void updateTerminalScroll(object sender, SizeChangedEventArgs e)
         {
             if (chkBoxScroll.IsChecked == true)
@@ -325,7 +336,32 @@ namespace okterm
         }
         #endregion
 
+        #region Initialisation
+        private void init(object sender, RoutedEventArgs e)
+        {
 
+            listPorts();
+
+            comboBoxSpeeds.ItemsSource = baudrates;
+            comboBoxPorts.ItemsSource = portList;
+
+            try
+            {
+                WqlEventQuery query = new WqlEventQuery("SELECT * FROM Win32_DeviceChangeEvent");
+                watcher = new ManagementEventWatcher(query);
+                watcher.EventArrived += new EventArrivedEventHandler(handleWMIEvent);
+                watcher.Start();
+            }
+            catch (ManagementException ex)
+            {
+                addTextError(ex.Message + "\n");
+            }
+
+            txtPrompt.Focus();
+
+        }
+
+        #endregion
 
 
 
