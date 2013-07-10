@@ -17,6 +17,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Management;
+using System.Configuration;
 
 namespace okterm
 {
@@ -270,6 +271,8 @@ namespace okterm
         #region App event handlers
         private void Window_Closing(object sender, CancelEventArgs e)
         {
+            saveSetting("height", this.ActualHeight);
+            saveSetting("width", this.ActualWidth);
             // to prevent "COM object that has been separated from its underlying RCW cannot be used."
             watcher.Stop();
         }
@@ -339,6 +342,10 @@ namespace okterm
         #region Initialisation
         private void init(object sender, RoutedEventArgs e)
         {
+            this.Height = getSetting<double>("height");
+            this.Width = getSetting<double>("width");
+
+            txtTest.Text = Properties.Settings.Default.test;
 
             listPorts();
 
@@ -362,6 +369,38 @@ namespace okterm
         }
 
         #endregion
+
+
+        #region User/app settings functions
+        private T getSetting<T>(string key)
+        {
+            return (T)Properties.Settings.Default[key];
+            
+        }
+
+        private void saveSetting<T>(string key, T value)
+        {
+            Properties.Settings.Default[key] = value;
+
+            Properties.Settings.Default.Save();
+        }
+        #endregion
+
+
+
+
+
+
+        private void button1_Click(object sender, RoutedEventArgs e)
+        {
+            saveSetting("test", textBox1.Text);
+        }
+
+
+        private void button2_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("test: " + getSetting<string>("test"));
+        }
 
 
 
